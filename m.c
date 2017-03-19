@@ -2,10 +2,11 @@
 Lcx: Port Data Transfer
 Compile Environment:Windows Codeblocks 10.05/Ubuntu 10.04 Codeblocks 8.10
 */
+//#define WIN32 1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
 #include <signal.h>
 #include <stdint.h>
 
@@ -15,29 +16,20 @@ Compile Environment:Windows Codeblocks 10.05/Ubuntu 10.04 Codeblocks 8.10
 
 #include <winsock2.h>
 #include <windows.h>
+#pragma comment(lib,"Ws2_32")
 
 #define SOCKET_INIT {WSADATA wsa;WSAStartup(MAKEWORD(2,2),&wsa);}
-/*
-#define PTHREAD_INIT {pthread_win32_process_attach_np();pthread_win32_thread_attach_np();atexit(detach_ptw32);}
-
-static void detach_ptw32(void)
-{
-pthread_win32_thread_detach_np();
-pthread_win32_process_detach_np();
-}
-*/
-
 
 #define	ThreadReturn DWORD WINAPI
 
 #define delay(x) Sleep(x)
-
+typedef LPTHREAD_START_ROUTINE (*Func)(void*);
 #else	//LINUX COMPILE
 
 
 #define PTW32_STATIC_LIB
 #include <pthread.h>
-
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -52,10 +44,9 @@ typedef int SOCKET;
 
 #define delay(x) usleep(x*1000)
 #define closesocket(x) close(x)
-
+typedef ThreadReturn (*Func)(void*);
 #endif
 
-typedef ThreadReturn (*Func)(void*);
 
 FILE* lcx_log = NULL;
 FILE* lcx_hex = NULL;
@@ -72,15 +63,13 @@ void ctrl_c(int32_t i)
 	exit(0);
 }
 
-
 int in_createthread(Func run,void* data)
 {
 	#ifdef WIN32
 		HANDLE h = CreateThread(NULL,0,run,data,0,NULL);
 		CloseHandle(h);
 	#else
-		PTHREAD_INIT
-		pthread_t tt;
+		PTHREAD_INIT pthread_t tt;
 		pthread_create(&tt,NULL,run,data);
 	#endif
 	delay(5);
@@ -117,7 +106,8 @@ ThreadReturn in_data_tran(void* p)
 	FD_SET(t[0],&fd_list);
 	FD_SET(t[1],&fd_list);
 
-	unsigned char buf[BUF_LEN];
+	//unsigned char buf[BUF_LEN];
+	char buf[BUF_LEN];
 	int OK = 1;
 	int total_byte = 0;
 	++total_connect;
@@ -133,8 +123,7 @@ ThreadReturn in_data_tran(void* p)
 				{
 					total_byte += len;
 					char out[100];
-					sprintf(out,"\n[+]	Send <Total %d>: %d.%d.%d.%d:%d -> %d.%d.%d.%d:%d,	%d Bytes\n",
-							total_connect,ip[i][0],ip[i][1],ip[i][2],ip[i][3],port[i],ip[i==0][0],ip[i==0][1],ip[i==0][2],ip[i==0][3],port[i==0],len);
+					sprintf(out,"\n[+]	Send <Total %d>: %d.%d.%d.%d:%d -> %d.%d.%d.%d:%d,	%d Bytes\n",total_connect,ip[i][0],ip[i][1],ip[i][2],ip[i][3],port[i],ip[i==0][0],ip[i==0][1],ip[i==0][2],ip[i==0][3],port[i==0],len);
 					fprintf(stdout,"%s",out);fflush(stdout);
 					if(lcx_log)fprintf(lcx_log,"%s",out),fflush(lcx_log);
 					if(lcx_text)
@@ -184,32 +173,19 @@ struct s_data
 	struct sockaddr_in s1;
 	struct sockaddr_in s2;
 };
+
 ThreadReturn udp_in_data_tran(void* p)
 {
 	struct s_data *tData = (struct s_data*)p; 
 	SOCKET t[2];
-	//t[0]=((int*)p)[0];
-	//t[1]=((int*)p)[1]; 
 	t[0]=tData->t1;
 	t[1]=tData->t2;
-	
-
 	struct sockaddr_in sa[2];
 	sa[0]=tData->s1;
 	sa[1]=tData->s2;
 	const unsigned char* ip[2];
 	unsigned short port[2];
-	/*
-	int len = sizeof(struct sockaddr_in);
-	if(recvfrom(t[0],0,0,0,(struct sockaddr*)&sa,&len)==-1 || recvfrom(t[1],0,0,0,(struct sockaddr*)&sa+1,&len)==-1)
-	{
-		fprintf(stdout,"\n[-] Get Remote Host Failed\n");
-		if(lcx_log)fprintf(lcx_log,"\n[-] Get Remote Host Failed\n"),fflush(lcx_log);
-		closesocket(t[0]);
-		closesocket(t[1]);
-		return 0;
-	}
-	*/
+
 	ip[0] = (unsigned char*)&sa[0].sin_addr.s_addr;
 	ip[1] = (unsigned char*)&sa[1].sin_addr.s_addr;
 	port[0] = htons(sa[0].sin_port);
@@ -220,7 +196,7 @@ ThreadReturn udp_in_data_tran(void* p)
 	FD_SET(t[0],&fd_list);
 	FD_SET(t[1],&fd_list);
 
-	unsigned char buf[BUF_LEN];
+	char buf[BUF_LEN];
 	int OK = 1;
 	int total_byte = 0;
 	++total_connect;
@@ -232,42 +208,50 @@ ThreadReturn udp_in_data_tran(void* p)
 		{
 			if(FD_ISSET(t[i],&check_list))
 			{
-				int len = recvfrom(t[0],buf,BUF_LEN,0,(struct sockaddr*)&sa[i],&t_len);
-				//int len = recv(t[i],buf,BUF_LEN,0);
-				//if(len>0 && send(t[i==0],buf,len,0)>0 )
-				if(len>0 && sendto(t[i==0],buf,len,0,(struct sockaddr*)&sa[i==0],t_len)>0 )
+				int len =recvfrom(t[i],buf,BUF_LEN,0,(struct sockaddr*)&sa[i],&t_len);
+				if(len>0)
 				{
-					total_byte += len;
-					char out[100];
-					sprintf(out,"\n[+]	Send <Total %d>: %d.%d.%d.%d:%d -> %d.%d.%d.%d:%d,	%d Bytes\n",
-							total_connect,ip[i][0],ip[i][1],ip[i][2],ip[i][3],port[i],ip[i==0][0],ip[i==0][1],ip[i==0][2],ip[i==0][3],port[i==0],len);
-					fprintf(stdout,"%s",out);fflush(stdout);
-					if(lcx_log)fprintf(lcx_log,"%s",out),fflush(lcx_log);
-					if(lcx_text)
+					if(sendto(t[i==0],buf,len,0,(struct sockaddr*)&sa[i==0],t_len)>0 )
 					{
-						fprintf(lcx_text,"\n%s\n",out);
-						fwrite(buf,1,len,lcx_text);
-						fflush(lcx_text);
-					}
-					if(lcx_hex)
-					{
-						fprintf(lcx_hex,"\n%s",out);
-						int i;
-						for(i=0;i<len;++i)
+						total_byte += len;
+						char out[100];
+						sprintf(out,"\n[+]	Send <Total %d>: %d.%d.%d.%d:%d -> %d.%d.%d.%d:%d,	%d Bytes\n",
+								total_connect,ip[i][0],ip[i][1],ip[i][2],ip[i][3],port[i],ip[i==0][0],ip[i==0][1],ip[i==0][2],ip[i==0][3],port[i==0],len);
+						fprintf(stdout,"%s",out);fflush(stdout);
+						if(lcx_log)fprintf(lcx_log,"%s",out),fflush(lcx_log);
+						if(lcx_text)
 						{
-							if(i%16==0)fprintf(lcx_hex,"\n");
-							fprintf(lcx_hex,"%02X ",buf[i]);
+							fprintf(lcx_text,"\n%s\n",out);
+							fwrite(buf,1,len,lcx_text);
+							fflush(lcx_text);
 						}
-						fflush(lcx_hex);
+						if(lcx_hex)
+						{
+							fprintf(lcx_hex,"\n%s",out);
+							int i;
+							for(i=0;i<len;++i)
+							{
+								if(i%16==0)fprintf(lcx_hex,"\n");
+								fprintf(lcx_hex,"%02X ",buf[i]);
+							}
+							fflush(lcx_hex);
+						}
 					}
-				}
-				else
-				{
-					OK = 0;
-					fprintf(stdout,"\n[+]	Connection <Total %d> Cutdown, Total : %d Bytes\n\n",total_connect,total_byte);fflush(stdout);
-					if(lcx_log)fprintf(lcx_log,"\n[+]	Connection <Total %d> Cutdown, Total : %d Bytes\n\n",total_connect,total_byte),fflush(lcx_log);
+					else
+					{
+						OK = 0;
+						fprintf(stdout,"\n[+]	Connection <Total %d> Cutdown, Total : %d Bytes\n\n",total_connect,total_byte);fflush(stdout);
+						if(lcx_log)fprintf(lcx_log,"\n[+]	Connection <Total %d> Cutdown, Total : %d Bytes\n\n",total_connect,total_byte),fflush(lcx_log);
 
-					break;
+						break;
+					}
+				}else{
+					#ifdef WIN32
+						int err=WSAGetLastError();
+						fprintf(stdout,"\n[+]	Error %d\n\n",err);fflush(stdout);
+						if (err==10054) break;
+					#endif
+					sendto(t[i==0],0,0,0,(struct sockaddr*)&sa[i==0],t_len);
 				}
 			}
 		}
@@ -382,9 +366,7 @@ int lcx_slave(const char* ip1_str,unsigned short port1,const char* ip2_str,unsig
 
 int udp_slave(const char* ip1_str,unsigned short port1,const char* ip2_str,unsigned short port2)
 {
-	SOCKET_INIT
-
-		char out1[100],out2[100];
+	SOCKET_INIT char out1[100],out2[100];
 	while(1)
 	{
 		unsigned long ip1 = gethost(ip1_str);
@@ -419,17 +401,14 @@ int udp_slave(const char* ip1_str,unsigned short port1,const char* ip2_str,unsig
 		{
 			fprintf(stdout,"\n[+]	Connect %s, Please Wait\n",out1);fflush(stdout);
 			if(lcx_log)fprintf(lcx_log,"\n[+]	Connect %s, Please Wait\n",out1),fflush(lcx_log);
-			/*
-			while(connect(s[0],(struct sockaddr*)&sa[0],sizeof(struct sockaddr))!=0)
+			while(sendto(s[0],0,0,0,(struct sockaddr*)&sa[0],sizeof(struct sockaddr))==0)
 			{
 				fprintf(stdout,"\n[-]	Connect %s Failed,Try Again..\n",out1);
 				if(lcx_log)fprintf(lcx_log,"\n[-]	Connect %s Failed,Try Again..\n",out1),fflush(lcx_log);
 				delay(1000);
 			}
-			*/
-			char c;
-			//if(recv(s[0],(char*)&c,1,MSG_PEEK)<=0)
-			if(recvfrom(s[0],(char*)&c,1,MSG_PEEK,0,0)<=0)
+			int len=sizeof(struct sockaddr);
+			if(recvfrom(s[0],0,0,0,(struct sockaddr*)&sa[0],&len)<0)
 			{
 				fprintf(stdout,"\n[-]	Connect %s Failed,CutDown...\n",out2);
 				if(lcx_log)fprintf(lcx_log,"\n[-]	Connect %s Failed,CutDown...\n",out2),fflush(lcx_log);
@@ -439,17 +418,18 @@ int udp_slave(const char* ip1_str,unsigned short port1,const char* ip2_str,unsig
 			}
 			fprintf(stdout,"\n[+]	Connect %s Successed,Now Connect %s\n",out1,out2);fflush(stdout);
 			if(lcx_log)fprintf(lcx_log,"\n[+]	Connect %s Successed,Now Connect %s\n",out1,out2),fflush(lcx_log);
-			struct s_data *tData=malloc(sizeof(struct s_data));
-			tData->t1=s[0];
-			tData->t2=s[1];
-			in_createthread(udp_in_data_tran,tData);
-			free(tData);
-			/*
-			if(connect(s[1],(struct sockaddr*)&sa[1],sizeof(struct sockaddr))==0)
+			if(sendto(s[1],0,0,0,(struct sockaddr*)&sa[1],sizeof(struct sockaddr))==0)
 			{
 				fprintf(stdout,"\n[+]	Connect %s Successed,Transfering...\n",out2);fflush(stdout);
 				if(lcx_log)fprintf(lcx_log,"\n[+]	Connect %s Successed,Transfering...\n",out2),fflush(lcx_log);
-				in_createthread(in_data_tran,s);
+				struct s_data *tData=(struct s_data*)malloc(sizeof(struct s_data));
+				tData->t1=s[0];
+				tData->t2=s[1];
+				tData->s1=sa[0];
+				tData->s2=sa[1];
+				udp_in_data_tran(tData);
+				//in_createthread(udp_in_data_tran,tData);
+				free(tData);
 			}
 			else
 			{
@@ -457,7 +437,7 @@ int udp_slave(const char* ip1_str,unsigned short port1,const char* ip2_str,unsig
 				if(lcx_log)fprintf(lcx_log,"\n[-]	Connect %s Failed,CutDown...\n",out2),fflush(lcx_log);
 				closesocket(s[0]);
 				closesocket(s[1]);
-			}*/
+			}
 		}
 		else
 		{
@@ -561,16 +541,12 @@ int lcx_listen(unsigned short port1,unsigned short port2)
 
 int udp_listen(unsigned short port1,unsigned short port2)
 {
-	SOCKET_INIT
-
-		SOCKET s[2]={-1,-1};
+	SOCKET_INIT SOCKET s[2]={-1,-1};
 	unsigned short p[2];
 	p[0]=port1;
 	p[1]=port2;
 
-	struct sockaddr_in sa;
-	sa.sin_family = AF_INET;
-	sa.sin_addr.s_addr = INADDR_ANY;
+	struct sockaddr_in sa[2];
 	int i;
 	int OK = 0;
 	for(i=0; i<2; ++i)
@@ -580,36 +556,20 @@ int udp_listen(unsigned short port1,unsigned short port2)
 		{
 			fprintf(stdout,"\n[+]	Create Socket %d Successed\n",i+1);fflush(stdout);
 			if(lcx_log)fprintf(lcx_log,"\n[+]	Create Socket %d Successed\n",i+1),fflush(lcx_log);
-			sa.sin_port = htons(p[i]);
-			if(bind(s[i],(struct sockaddr*)&sa,sizeof(sa))==0)
+			sa[i].sin_family = AF_INET;
+			sa[i].sin_addr.s_addr = INADDR_ANY;
+			sa[i].sin_port = htons(p[i]);
+			if(bind(s[i],(struct sockaddr*)&sa[i],sizeof(sa[i]))==0)
 			{
 				fprintf(stdout,"\n[+]	Bind On Port %u Success\n",p[i]);fflush(stdout);
 				if(lcx_log)fprintf(lcx_log,"\n[+]	Bind On Port %u Success\n",p[i]),fflush(lcx_log);
 				OK = 1;
-				/*
-				if(listen(s[i],SOMAXCONN)==0)
-				{
-					fprintf(stdout,"\n[+]	Listen On Port %u Successed\n",p[i]);fflush(stdout);
-					if(lcx_log)fprintf(lcx_log,"\n[+]	Listen On Port %u Successed\n",p[i]),fflush(lcx_log);
-					OK =	1;
-				}
-				else
-				{
-					fprintf(stdout,"\n[-]	Listen On Port %u Failed\n",p[i]);
-					if(lcx_log)fprintf(lcx_log,"\n[-]	Listen On Port %u Failed\n",p[i]),fflush(lcx_log);
-					break;
-				}
-		*/
-			}
-			else
-			{
+			}else{
 				fprintf(stdout,"\n[-]	Bind On Port %u Failed\n",p[i]);
 				if(lcx_log)fprintf(lcx_log,"\n[-]	Bind On Port %u Failed\n",p[i]),fflush(lcx_log);
 				break;
 			}
-		}
-		else
-		{
+		}else{
 			fprintf(stdout,"\n[-]	Create Socket %d Failed\n",i+1);
 			if(lcx_log)fprintf(lcx_log,"\n[-]	Create Socket %d Failed\n",i+1),fflush(lcx_log);
 			break;
@@ -621,40 +581,28 @@ int udp_listen(unsigned short port1,unsigned short port2)
 		closesocket(s[1]);
 		return -1;
 	}
-
 	i = 0;
 	struct sockaddr_in t[2];
-	int sz = sizeof(sa);
-	int t_len=sizeof(struct sockaddr_in);
+	int t_len=sizeof(struct sockaddr);
 	while(1)
 	{
-		//fprintf(stdout,"\n[+]	Waiting Connect On Port %u\n",p[i]);fflush(stdout);
-		//if(lcx_log)fprintf(lcx_log,"\n[+]	Waiting Connect On Port %u\n",p[i]),fflush(lcx_log);
-		//t[i] = accept(s[i],(struct sockaddr*)&sa,&sz);
-		//const unsigned char *ip = (unsigned char*)&t[i].sin_addr.s_addr;
-		if(recvfrom(s[i],0,0,0,(struct sockaddr*)&t[i],&t_len)!=-1)
-		{
+		recvfrom(s[i],0,0,0,(struct sockaddr*)&t[i],&t_len);
 		const unsigned char *ip = (unsigned char*)&t[i].sin_addr.s_addr;
-			fprintf(stdout,"\n[+]	Connect From %d.%d.%d.%d:%d On Port %d\n",ip[0],ip[1],ip[2],ip[3],htons(t[i].sin_port),p[i]);fflush(stdout);
-			if(lcx_log)fprintf(lcx_log,"\n[+]	Connect From %d.%d.%d.%d:%d On Port %d\n",ip[0],ip[1],ip[2],ip[3],htons(t[i].sin_port),p[i]),fflush(lcx_log);
-			if(i==1)
-			{
-				struct s_data *tData=malloc(sizeof(struct s_data));
-				tData->t1=s[0];
-				tData->t2=s[1];
-				tData->s1=t[0];
-				tData->s2=t[1];
-				in_createthread(udp_in_data_tran,tData);
-				free(tData);
-			}
-			i = (i==0);
-		}
-		else
+		fprintf(stdout,"\n[+]	Connect From %d.%d.%d.%d:%d On Port %d\n",ip[0],ip[1],ip[2],ip[3],htons(t[i].sin_port),p[i]);fflush(stdout);
+		if(lcx_log)fprintf(lcx_log,"\n[+]	Connect From %d.%d.%d.%d:%d On Port %d\n",ip[0],ip[1],ip[2],ip[3],htons(t[i].sin_port),p[i]),fflush(lcx_log);
+		if(i==1)
 		{
-			fprintf(stdout,"\n[-]	Accept Failed On Port %d\n",p[i]);
-			if(lcx_log)fprintf(lcx_log,"\n[-]	Accept Failed On Port %d\n",p[i]),fflush(lcx_log);
-			i=0;
+			sendto(s[i],0,0,0,(struct sockaddr*)&t[i],t_len);
+			struct s_data *tData=(struct s_data*)malloc(sizeof(struct s_data));
+			tData->t1=s[0];
+			tData->t2=s[1];
+			tData->s1=t[0];
+			tData->s2=t[1];
+			udp_in_data_tran(tData);
+			//in_createthread(udp_in_data_tran,tData);
+			free(tData);
 		}
+		i = (i==0);
 	}
 	return 0;
 }
@@ -750,50 +698,33 @@ int lcx_tran(unsigned short port1,const char* ip2_str,unsigned short port2)
 
 int udp_tran(unsigned short port1,const char* ip2_str,unsigned short port2)
 {
-	SOCKET_INIT
-		SOCKET s = socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
-	struct sockaddr_in sa;
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(port1);
-	sa.sin_addr.s_addr = INADDR_ANY;
+	SOCKET_INIT SOCKET s[2]={-1,-1};
+	s[0] = socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+	struct sockaddr_in sa[2];
+	sa[0].sin_family = AF_INET;
+	sa[0].sin_port = htons(port1);
+	sa[0].sin_addr.s_addr = INADDR_ANY;
 	int ok =0;
-	if(s!=-1)
+	if(s[0]!=-1)
 	{
-		if(bind(s,(struct sockaddr*)&sa,sizeof(sa))==0)
+		if(bind(s[0],(struct sockaddr*)&sa[0],sizeof(sa[0]))==0)
 		{
-		ok = 1;
-		/*
-			if(listen(s,SOMAXCONN)==0)
-			{
-				ok = 1;
-				fprintf(stdout,"\n[+]	Listening On Port %d...\n",port1);fflush(stdout);
-				if(lcx_log)fprintf(lcx_log,"\n[+]	Listening On Port %d...\n",port1),fflush(lcx_log);
-			}
-			else
-			{
-				fprintf(stdout,"\n[-]	Listen Failed\n");
-				if(lcx_log)fprintf(lcx_log,"\n[-]	Listen Failed\n"),fflush(lcx_log);
-			}*/
-		}
-		else
-		{
+			ok = 1;
+		}else{
 			fprintf(stdout,"\n[-]	Bind On Port %d Failed\n",port1);
 			if(lcx_log)fprintf(lcx_log,"\n[-]	Bind On Port %d Failed\n",port1),fflush(lcx_log);
 		}
-	}
-	else
-	{
+	}else{
 		fprintf(stdout,"\n[-]	Create Socket Failed\n");
 		if(lcx_log)fprintf(lcx_log,"\n[-]	Create Socket Failed\n"),fflush(lcx_log);
 	}
 	if(!ok)
 	{
-		closesocket(s);
+		closesocket(s[0]);
 		return -1;
 	}
-	SOCKET tt[2];
-	//SOCKET ac=-1;
-	ok = sizeof(sa);
+	//ok = sizeof(sockaddr);
+	ok = sizeof(struct sockaddr_in);
 	char out1[100],out2[100];
 	while(1)
 	{
@@ -805,47 +736,37 @@ int udp_tran(unsigned short port1,const char* ip2_str,unsigned short port2)
 		}
 		fprintf(stdout,"\n[+]	Waiting Connect On Port %d...\n",port1);fflush(stdout);
 		if(lcx_log)fprintf(lcx_log,"\n[+]	Waiting Connect On Port %d...\n",port1),fflush(lcx_log);
-	
-	recvfrom(s,0,0,0,(struct sockaddr*)&sa,&ok);
-		//if(ac=accept(s,(struct sockaddr*)&sa,&ok),ac==-1)
-		//{
-		//	break;
-		//}
-		unsigned char* ip =(unsigned char*)&sa.sin_addr.s_addr;
-		sprintf(out1,"%d.%d.%d.%d:%d",ip[0],ip[1],ip[2],ip[3],htons(sa.sin_port));
+		recvfrom(s[0],0,0,0,(struct sockaddr*)&sa[0],&ok);
+		sendto(s[0],0,0,0,(struct sockaddr*)&sa[0],ok);
+		unsigned char* ip =(unsigned char*)&sa[0].sin_addr.s_addr;
+		sprintf(out1,"%d.%d.%d.%d:%d",ip[0],ip[1],ip[2],ip[3],htons(sa[0].sin_port));
 		ip = (unsigned char*)&ip2;
 		sprintf(out2,"%d.%d.%d.%d:%d",ip[0],ip[1],ip[2],ip[3],(port2));
 		fprintf(stdout,"\n[+]	Connect From %s, Now Connect to %s\n",out1,out2);fflush(stdout);
 		if(lcx_log)fprintf(lcx_log,"\n[+]	Connect From %s, Now Connect to %s\n",out1,out2),fflush(lcx_log);
-		
-	sa.sin_port = htons(port2);
-		sa.sin_addr.s_addr = ip2;
-		SOCKET s2 = socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
-		//if(connect(s2,(struct sockaddr*)&sa,sizeof(sa))==0)
-		//if(recvfrom(s2,0,0,0,(struct sockaddr*)&sa,sizeof(sa)==0))
-		if(sendto(s2,0,0,0,(struct sockaddr*)&sa,sizeof(sa)>0))
+		sa[1].sin_family = AF_INET;
+		sa[1].sin_port = htons(port2);
+		sa[1].sin_addr.s_addr = ip2;
+		s[1] = socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+		if(sendto(s[1],0,0,0,(struct sockaddr*)&sa[1],sizeof(sa[1])>0))
 		{
-			//tt[0]=ac;
-			struct s_data *tData=malloc(sizeof(struct s_data));
-			tData->t1=s;
-			tData->t2=s2;
-			//tt[0]=s;
-			//tt[1]=s2;
+			struct s_data *tData=(struct s_data*)malloc(sizeof(struct s_data));
+			tData->t1=s[0];
+			tData->t2=s[1];
+			tData->s1=sa[0];
+			tData->s2=sa[1];
 			fprintf(stdout,"\n[+]	Connect %s Successed,Start Transfer...\n",out2);fflush(stdout);
 			if(lcx_log)fprintf(lcx_log,"\n[+]	Connect %s Successed,Start Transfer...\n",out2),fflush(lcx_log);
-			in_createthread(udp_in_data_tran,tData);
+			udp_in_data_tran(tData);
+			//in_createthread(udp_in_data_tran,tData);
 			free(tData);
-		}
-		else
-		{
+		}else{
 			fprintf(stdout,"\n[-]	Connect %s Failed...\n",out2),fflush(stdout);
 			if(lcx_log)fprintf(lcx_log,"\n[-]	Connect %s Failed...\n",out2),fflush(lcx_log);
-			closesocket(s2);
-			//closesocket(ac);
+			closesocket(s[1]);
 		}
 	}
-	closesocket(s);
-	//closesocket(ac);
+	closesocket(s[0]);
 	return 0;
 }
 
@@ -885,7 +806,11 @@ long getport(const char *str)
 
 void setfile(FILE** fp,const char*file)
 {
-	*fp = fopen(file,"w");
+	#ifdef WIN32
+		fopen(fp,file,"w");
+	#else
+		*fp = fopen(file,"w");
+	#endif
 	if (*fp==NULL)
 	{
 		fprintf(stdout,"\nERROR: Can not Write to File: %s\n\n",file);
@@ -953,7 +878,7 @@ int main_func(int argc,char**argv)
 				port2 = getport(argv[++n]);
 			}
 			break;
-	case 4:
+		case 4:
 			if (argc<4)
 			{
 				help(argv[0]);
@@ -965,7 +890,7 @@ int main_func(int argc,char**argv)
 				port2 = getport(argv[++n]);
 			}
 			break;
-	case 5:
+		case 5:
 			if (argc<6)
 			{
 				help(argv[0]);
@@ -1058,9 +983,9 @@ int main_func(int argc,char**argv)
 		case 1:lcx_listen(port1,port2);break;
 		case 2:lcx_slave(addr1,port1,addr2,port2);break;
 		case 3:lcx_tran(port1,addr2,(uint16_t)port2);break;
-	case 4:udp_listen(port1,port2);break;
-	case 5:udp_slave(addr1,port1,addr2,port2);break;
-	case 6:udp_tran(port1,addr2,(uint16_t)port2);break;
+		case 4:udp_listen(port1,port2);break;
+		case 5:udp_slave(addr1,port1,addr2,port2);break;
+		case 6:udp_tran(port1,addr2,(uint16_t)port2);break;
 		default:break;
 	}
 	return 0;
@@ -1070,52 +995,53 @@ int main_func(int argc,char**argv)
 
 int main(int argc,char** argv)
 {
-	SOCKET_INIT
-		signal(SIGINT,ctrl_c);
+	SOCKET_INIT signal(SIGINT,ctrl_c);
 	int ret = main_func(argc,argv);
-#ifdef COMMAND_MODE
-	while(1)
-	{
-		char input_buf[8192]={0};
-		char *argv_list[ARGC_MAXCOUNT]={"lcx"};
-		printf(">");
-		int argc_count = 1;
-		int flag = 0;
-		int i;
-		for(i=0;i<8192;++i)
+	/*
+	#ifdef COMMAND_MODE
+		while(1)
 		{
-			input_buf[i] = getchar();
-			if(input_buf[i] == '\n' || input_buf[i] == -1 )
+			char input_buf[8192]={0};
+			char *argv_list[ARGC_MAXCOUNT]={"lcx"};
+			printf(">");
+			int argc_count = 1;
+			int flag = 0;
+			int i;
+			for(i=0;i<8192;++i)
 			{
-				input_buf[i] = '\0';
+				input_buf[i] = getchar();
+				if(input_buf[i] == '\n' || input_buf[i] == -1 )
+				{
+					input_buf[i] = '\0';
+				}
+				if(input_buf[i]=='\0' || argc_count>=ARGC_MAXCOUNT-2)
+				{
+					break;
+				}
+				if(flag ==0 && input_buf[i]!=' ' && input_buf[i]!='\0' )
+				{
+					flag = 1;
+					argv_list[argc_count] = input_buf+i;
+					++argc_count;
+				}
+				else if(flag ==1 && (input_buf[i]==' ' || input_buf[i]=='\0') )
+				{
+					flag = 0;
+					input_buf[i] = '\0';
+				}
 			}
-			if(input_buf[i]=='\0' || argc_count>=ARGC_MAXCOUNT-2)
-			{
-				break;
-			}
-			if(flag ==0 && input_buf[i]!=' ' && input_buf[i]!='\0' )
-			{
-				flag = 1;
-				argv_list[argc_count] = input_buf+i;
-				++argc_count;
-			}
-			else if(flag ==1 && (input_buf[i]==' ' || input_buf[i]=='\0') )
-			{
-				flag = 0;
-				input_buf[i] = '\0';
-			}
+			argv_list[argc_count] = NULL;
+			#ifdef LCX_DEBUG
+					putchar('\n');
+					for(i=0;i<argc_count;++i)
+					{
+						printf("argv[%d]: %s\n",i,argv_list[i]);
+					}
+			#endif
+			ret = main_func(argc_count,argv_list);
 		}
-		argv_list[argc_count] = NULL;
-#ifdef LCX_DEBUG
-		putchar('\n');
-		for(i=0;i<argc_count;++i)
-		{
-			printf("argv[%d]: %s\n",i,argv_list[i]);
-		}
-#endif
-		ret = main_func(argc_count,argv_list);
-	}
-#endif
+	#endif
+	*/
 	return ret;
 }
 
