@@ -2,7 +2,7 @@
 Lcx: Port Data Transfer
 Compile Environment:Windows Codeblocks 10.05/Ubuntu 10.04 Codeblocks 8.10
 */
-//#define WIN32 1
+#define WIN32 1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +23,7 @@ Compile Environment:Windows Codeblocks 10.05/Ubuntu 10.04 Codeblocks 8.10
 #define	ThreadReturn DWORD WINAPI
 
 #define delay(x) Sleep(x)
-typedef LPTHREAD_START_ROUTINE (*Func)(void*);
+typedef LPTHREAD_START_ROUTINE Func;
 #else	//LINUX COMPILE
 
 
@@ -806,11 +806,7 @@ long getport(const char *str)
 
 void setfile(FILE** fp,const char*file)
 {
-	#ifdef WIN32
-		fopen(fp,file,"w");
-	#else
-		*fp = fopen(file,"w");
-	#endif
+	*fp = fopen(file,"w");
 	if (*fp==NULL)
 	{
 		fprintf(stdout,"\nERROR: Can not Write to File: %s\n\n",file);
