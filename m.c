@@ -35,7 +35,7 @@ typedef LPTHREAD_START_ROUTINE Func;
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/select.h>
-
+#include <errno.h>
 #define PTHREAD_INIT
 #define SOCKET_INIT
 
@@ -45,6 +45,8 @@ typedef int SOCKET;
 #define delay(x) usleep(x*1000)
 #define closesocket(x) close(x)
 typedef ThreadReturn (*Func)(void*);
+extern int errno;
+int geterror(){return errno;}
 #endif
 
 
@@ -159,11 +161,11 @@ ThreadReturn in_data_tran(void* p)
 
 	closesocket(t[0]);
 	closesocket(t[1]);
-#ifdef WIN32
-	return 0;
-#else
-	return NULL;
-#endif
+	#ifdef WIN32
+		return 0;
+	#else
+		return NULL;
+	#endif
 }
 
 struct s_data
@@ -249,9 +251,16 @@ ThreadReturn udp_in_data_tran(void* p)
 					#ifdef WIN32
 						int err=WSAGetLastError();
 						fprintf(stdout,"\n[+]	Error %d\n\n",err);fflush(stdout);
-						if (err==10054) break;
+						if (err==10054) 
+						{
+							sendto(t[i==0],0,0,0,(struct sockaddr*)&sa[i==0],t_len);
+							break;
+						}
+					#else
+						sendto(t[i==0],0,0,0,(struct sockaddr*)&sa[i==0],t_len);
+						fprintf(stdout,"\n[+]	Error %s\n\n",strerror(errno));fflush(stdout);
+						fprintf(stdout,"\n[+]	Error %d\n\n",errno);fflush(stdout);
 					#endif
-					sendto(t[i==0],0,0,0,(struct sockaddr*)&sa[i==0],t_len);
 				}
 			}
 		}
@@ -260,11 +269,11 @@ ThreadReturn udp_in_data_tran(void* p)
 
 	closesocket(t[0]);
 	closesocket(t[1]);
-#ifdef WIN32
-	return 0;
-#else
-	return NULL;
-#endif
+	#ifdef WIN32
+		return 0;
+	#else
+		return NULL;
+	#endif
 }
 
 long gethost(const char* name)
